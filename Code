@@ -1,0 +1,311 @@
+#***---------------***#
+# This is a Shiny web application. You can run the application by clicking
+# the 'Run App' button above.
+# Author: Saad Baloch
+# Contact: saadbaloch444@gmail.com
+#
+# Find out more about building applications with Shiny here:
+#
+#    http://shiny.rstudio.com/
+#***---------------***#
+
+library(shiny)
+library(shinydashboard)
+library(shinythemes)
+library(snotelr)
+library(tidyverse)
+library(ggpubr)
+library(ggfortify)
+library(autoplotly)
+library(lubridate)
+library(RColorBrewer)
+library(plotly)
+library(raster)
+library(png)
+library(shinyWidgets)
+library(sf)
+library(sp)
+library(leaflet)
+library(mapview)
+library(rgdal)
+#remotes::install_github("r-spatial/mapview")
+# Define UI for application that draws an interactive ggplot
+options(shiny.maxRequestSize=30*1024^2)
+ui =   navbarPage(" Write Application title here", theme = shinytheme("sandstone"),
+                tags$audio(src = "silence.mp3",type = "audio/mp3" ),
+                tags$audio(src = "win2000.mp3",type = "audio/mp3", autoplay = TRUE, controls = T),
+                img(src="FP_pic.jpg", align = "center",height='400px',width='2000px'),
+                #setBackgroundImage(src="Title.background.jpg", shinydashboard = TRUE),
+                tabPanel("Introduction",
+                icon = icon("info"),
+                img(src="tenor (1).gif", align = "topleft",height='90px',width='90px'),
+                div(p(h1("Objective"),style="text-align: justify;", "The objective of this project was to make a Shiny app that serves three purposes for the user:")),
+                p("1. The user can upload a shapefile and the app will return a map of its location."),
+                p("2. The user can select a SNOTEL station and the app will return interactive plots of SWE and air temperature."),
+                p("3. The user can upload a CSV file and the app will allow the user to perform regression analysis by selecting dependent and independent variables. The app then returns the regression results and interactive resultant regression plots."),
+                tabPanel("SNOTEL Temperature and SWE plots",
+                icon = icon("chart-area"),
+                img(src="tenor (2).gif", align = "topleft",height='90px',width='90px'),
+                sidebarLayout(sidebarPanel(fileInput("filemap", "Please choose a Shapefile",
+                                                     multiple = T,
+                                                              accept = c(".shp",
+                                                                         '.dbf',
+                                                                         '.sbn',
+                                                                         '.sbx',
+                                                                         '.shx',
+                                                                         ".prj"))),
+                                           mainPanel(mapviewOutput("mapview"))),
+                selectInput(inputId = "snotel_names", label = "Select SNOTEL site", choices = c("Bear Basin" = "319", "Secesh Summit" = "740", "Long Valley" = "1016")),
+                # Show plots side by side
+                splitLayout(
+                    plotlyOutput(outputId = "timeseries"),
+                    plotlyOutput(outputId = "Air_Temperature"))),
+                tabPanel("Regression Analysis",
+                icon = icon("wpexplorer"),
+                img(src="DisfiguredEvilAmericancreamdraft-max-1mb.gif", align = "topleft",height='90px',width='90px'),
+                dataTableOutput('mytable'),
+                sidebarLayout(sidebarPanel(fileInput("file1", "Please choose a CSV file",
+                                                     multiple = T,
+                                                     accept = c("text/csv",
+                                                                "text/comma-separated-values,text/plain",
+                                                                ".csv")),
+                                           tags$hr(),
+                                           checkboxInput("header", "Header", TRUE),
+                                           radioButtons("sep", "Separator",
+                                                        choices = c(Comma = ",",
+                                                                    Semicolon = ";",
+                                                                    Tab = "\t"),
+                                                        selected = ","),
+                                           radioButtons("quote", "Quote",
+                                                        choices = c(None = "",
+                                                                    "Double Quote" = '"',
+                                                                    "Single Quote" = "'"),
+                                                        selected = '"'),
+                                           tags$hr(),
+                                           radioButtons("disp", "Display",
+                                                        choices = c(Head = "head",
+                                                                    All = "all"),
+                                                        selected = "all")
+                                           
+                ),
+                mainPanel(
+                    tableOutput("contents")),),
+                actionButton("choice", "Define Regression Variables"),
+                selectInput("independent", "Independent Variables:", choices = NULL, multiple = T),
+                uiOutput("dependent1"),
+                #tableOutput("Table_selected.col"),
+                verbatimTextOutput("regTab")
+                
+  
+    ),
+    tabPanel("Plots",
+    icon = icon("chart-area"),
+    img(src="clippy.gif", align = "topleft",height='90px',width='90px'),
+    # Show plots side by side
+    splitLayout(
+      plotlyOutput(outputId = "RegPlots"),
+      plotlyOutput(outputId = "QQPlots")))
+    
+)
+        
+    
+
+# Tell the server how to assemble inputs into outputs
+    server = function(input, output, session) {
+       # 1 Shapefile input and map
+          # input$shp will be NULL initially. After the user selects
+          # and uploads a file, head of that data file by default,
+          # or all rows if selected, will be shown.
+          
+        observe({
+          shpdf <- input$filemap
+          if(is.null(shpdf)){
+            return()
+          }
+          previouswd <- getwd()
+          uploaddirectory <- dirname(shpdf$datapath[1])
+          setwd(uploaddirectory)
+          for(i in 1:nrow(shpdf)){
+            file.rename(shpdf$datapath[i], shpdf$name[i])
+          }
+          setwd(previouswd)
+          
+          map <- readOGR(paste(uploaddirectory, shpdf$name[grep(pattern="*.shp$", shpdf$name)], sep="/"))#,  delete_null_obj=TRUE)
+          map <- spTransform(map, CRS("+init=epsg:32611"))
+          
+          output$mapview<-renderMapview({
+            mapview(map)
+          })
+        })
+        
+    # output$Area = renderPlotly({
+    #   req(myshp.df())
+    #   a = myshp.df
+    #   c = leaflet(a) %>%
+    #     addPolygons(stroke = FALSE, fillOpacity = 0.5, smoothFactor = 0.5) %>%
+    #     addProviderTiles('Esri.WorldImagery') 
+    # })
+    #         
+    output$timeseries = renderPlotly({
+    
+    
+    df.bear.stn = snotel_download(site_id = as.numeric(input$snotel_names), internal = TRUE,
+                                  path = " type path here")   ## Download Bear Basin SNOTEL data where 319 is the snotel id for Bear Basin
+   
+   # Subset data accordingly if needed
+   # Creating Time series
+    snow_data_subset = subset(df.bear.stn, as.Date(date) > as.Date("2012-11-13") &
+                                  as.Date(date) < as.Date("2013-03-11"))
+    # Create a duplicate df
+    
+    df.bear = data.frame(df.bear.stn)
+    df.bear$Date = as.Date(df.bear$date, format = "%Y-%m-%d")
+    
+    df.bear$Month = lubridate::month(df.bear$date, label = TRUE, abbr=FALSE)
+    df.bear$Day = lubridate::day(df.bear$date)
+    df.bear$Year = lubridate::year(df.bear$date)
+    #df.bear$Timestamp = as.POSIXct(df.bear$date, format = "%d/%m/%Y %H:%M")
+    
+    # Rename the columns of the data-set
+    df.bear = df.bear %>% rename(Air_Temperature = temperature_mean)
+    
+    
+        
+    #2 Now plot the air temperature and SWE time series for 2019
+    #Air.Temp = ggplot(data = df.bear, aes(x= Date , y= Air_Temperature, colour = Air_Temperature),xlab("Date"), ylab("Air Temperature"), color = 2) +
+       # geom_point()+
+        #labs(colour = "Air_Temperature", title = "Mean Air Temperature Time Series")+
+       #xlab("Time Series")+
+        #ylab("Air Temperature")+
+        #theme(legend.position = "right") +
+        #scale_color_gradient2(low = "yellow", mid = "orange", high = "red")
+    ggplotly(Air.Temp)
+    
+    #2(a) Plot the Snow Water Equivalent interactive plot
+    SWE = ggplot( data = df.bear, aes(x= Date , y= snow_water_equivalent, colour = snow_water_equivalent),xlab("Date"), ylab("SWE"), color = 2) +
+        geom_point()+
+        labs(colour = "SWE", title = "Snow Water Equivalent Time Series")+
+        xlab("Time Series")+
+        ylab("SWE")+
+        theme(legend.position = "right")+
+        scale_color_gradient2(low = "cyan", mid = "deepskyblue", high = "blue4")
+        
+    ggplotly(SWE)
+    })
+    
+   #2(b) Plot the Air Temperature interactive plot
+    output$Air_Temperature = renderPlotly({
+        
+        # Now plot the air temperature and SWE time series for 2019
+        Air.Temp = ggplot(data = df.bear, aes(x= Date , y= Air_Temperature, colour = Air_Temperature),xlab("Date"), ylab("Air Temperature"), color = 2) +
+            geom_point()+
+            labs(colour = "Air_Temperature", title = "Mean Air Temperature Time Series")+
+            xlab("Time Series")+
+            ylab("Air Temperature")+
+            theme(legend.position = "right") +
+            scale_color_gradient2(low = "yellow", mid = "orange", high = "red")
+        ggplotly(Air.Temp)
+        
+    })
+        
+    
+    #3 Regression Analysis
+     mydf = reactive({
+            
+            # input$file1 will be NULL initially. After the user selects
+            # and uploads a file, head of that data file by default,
+            # or all rows if selected, will be shown.
+            
+            req(input$file1)
+            
+            df = read.csv(input$file1$datapath,
+                           header = input$header,
+                           sep = input$sep,
+                           quote = input$quote)
+            
+            if(input$disp == "head") {
+                return(head(df))
+            }
+            else {
+                return(df)
+            }
+            
+        })
+        
+        output$contents = renderTable({
+            req(mydf())
+            mydf()
+        })
+        
+        # Code for allowing the user to select the variables/columns of interest 
+        info = eventReactive(input$choice, {
+           req(mydf())
+           f = mydf()
+           f
+        })
+        
+        observeEvent(input$choice, { ## to update only when you click on the actionButton 
+            req(mydf())
+            updateSelectInput(session,"independent", "Please select independent variable(s):", choices = names(mydf()))
+            })
+        # output$Table_selected.col = renderTable({
+        #     input$choice
+        #     req(info(), input$columns)
+        #     f = info()
+        #     f = subset(f, select = input$columns) #subsetting takes place here
+        #     head(f)
+        # })
+        
+        output$dependent1 = renderUI({
+            req(mydf(), input$independent)
+            radioButtons("dependent1", "Select a dependent variable:",choices=names(mydf())[!names(mydf()) %in% as.character(input$independent)])
+        })
+        
+        ###  need to build your formula correctly; only using one dependent variable for demonstration; you can update as necessary
+        ## lm1 <- reactive({lm(reformulate(input$IndVar1,input$IndVar2, input$DepVar), data = RegData)})
+        
+        runRegression = reactive({
+            req(mydf(), input$independent, input$dependent1)
+            lm(reformulate(input$independent, input$dependent1),data=mydf())
+            
+            })
+        
+        output$regTab = renderPrint({
+            req(runRegression())
+            if(!is.null(input$independent)){
+                summary(runRegression())
+            } else {
+                print(data.frame(Warning="Please select Model Parameters."))
+            } 
+        })
+        
+        output$RegPlots = renderPlotly({
+          req(runRegression())
+          a =  runRegression()
+          b = ggplot(a, aes(x = .fitted, y = .resid)) +
+            geom_point() +
+            geom_smooth(method = loess, formula = y ~ x) +
+            labs(title="Residuals vs Fitted") +
+            xlab("Fitted") +
+            ylab("Residuals")
+          ggplotly(b)
+        })
+        
+        output$QQPlots = renderPlotly({
+          req(runRegression())
+          a =  runRegression()
+          q = ggplot(a, aes(qqnorm(.stdresid)[[1]], .stdresid)) +
+            geom_point(na.rm = T) +
+            geom_abline() +
+            labs(title="Normal Q-Q") +
+            xlab("Standardized Residuals") +
+            ylab("Theoretical Quantiles")
+          ggplotly(q)
+        })
+        
+    
+}
+
+
+# Run the application 
+shinyApp(ui = ui, server = server)
